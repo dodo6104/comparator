@@ -46,9 +46,11 @@
             letter-spacing: 0.5px;
         }
 
-        textarea {
+        .editor {
             width: 100%;
-            height: 180px;
+            min-height: 180px;
+            max-height: 400px;
+            overflow-y: auto;
             background: #232323;
             color: #ddd;
             border: 1px solid #3a3a3a;
@@ -56,17 +58,60 @@
             padding: 8px;
             font-family: inherit;
             font-size: 13px;
-            resize: vertical;
             outline: none;
+            white-space: pre-wrap;
+            word-break: break-word;
+            line-height: 1.5;
         }
-        textarea:focus { border-color: #4a8a4a; }
+        .editor:focus { border-color: #4a8a4a; }
+        .editor:empty::before {
+            content: attr(data-ph);
+            color: #555;
+        }
+
+        .settings {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 12px;
+        }
+        .switch-label {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            font-family: sans-serif;
+            font-size: 12px;
+            color: #999;
+            cursor: pointer;
+            user-select: none;
+        }
+        .switch {
+            position: relative;
+            width: 38px;
+            height: 20px;
+            background: #3a3a3a;
+            border-radius: 10px;
+            transition: background 0.15s;
+            flex-shrink: 0;
+        }
+        .switch::after {
+            content: '';
+            position: absolute;
+            top: 2px; left: 2px;
+            width: 16px; height: 16px;
+            background: #888;
+            border-radius: 50%;
+            transition: transform 0.15s, background 0.15s;
+        }
+        #fmtToggle { display: none; }
+        #fmtToggle:checked + .switch { background: #3d8c3d; }
+        #fmtToggle:checked + .switch::after { transform: translateX(18px); background: #eaffea; }
 
         .controls {
             display: flex;
             justify-content: center;
             align-items: center;
             gap: 8px;
-            margin-bottom: 16px;
+            margin-bottom: 10px;
         }
 
         button {
@@ -95,6 +140,18 @@
             color: #555;
             margin-left: 4px;
         }
+
+        .legend {
+            display: flex;
+            justify-content: center;
+            gap: 16px;
+            margin-bottom: 16px;
+            font-family: sans-serif;
+            font-size: 11px;
+            color: #777;
+        }
+        .legend span { display: inline-flex; align-items: center; gap: 5px; }
+        .legend .sw { width: 12px; height: 12px; border-radius: 2px; display: inline-block; }
 
         .stats-bar {
             display: none;
@@ -172,6 +229,24 @@
 
         .hl-del { background: #5c1f1f; color: #ffb3b3; border-radius: 2px; }
         .hl-ins { background: #1f5c1f; color: #b3ffb3; border-radius: 2px; }
+        .hl-fmt { background: #28386a; color: #bcd0ff; border-radius: 2px; border-bottom: 1px dotted #7d96d6; }
+
+        [data-tip] { cursor: help; }
+        #tooltip {
+            position: fixed;
+            z-index: 1000;
+            background: #111;
+            color: #eee;
+            border: 1px solid #555;
+            border-radius: 4px;
+            padding: 4px 9px;
+            font-family: sans-serif;
+            font-size: 12px;
+            pointer-events: none;
+            display: none;
+            white-space: nowrap;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.55);
+        }
     </style>
 </head>
 <body>
@@ -182,12 +257,20 @@
     <div class="inputs">
         <div>
             <div class="input-label">Text 1</div>
-            <textarea id="t1" placeholder="Vlož prvý text sem..."></textarea>
+            <div class="editor" id="t1" contenteditable="true" data-ph="Vlož prvý text sem..."></div>
         </div>
         <div>
             <div class="input-label">Text 2</div>
-            <textarea id="t2" placeholder="Vlož druhý text sem..."></textarea>
+            <div class="editor" id="t2" contenteditable="true" data-ph="Vlož druhý text sem..."></div>
         </div>
+    </div>
+
+    <div class="settings">
+        <label class="switch-label">
+            <input type="checkbox" id="fmtToggle">
+            <span class="switch"></span>
+            Rozpoznávať <b>bold</b>/<i>italic</i>
+        </label>
     </div>
 
     <div class="controls">
@@ -195,6 +278,12 @@
         <button class="btn-compare" onclick="compare()">Compare!</button>
         <button class="btn-secondary" onclick="clearAll()">Clear all</button>
         <span class="hint">alebo Ctrl+Enter</span>
+    </div>
+
+    <div class="legend">
+        <span><span class="sw" style="background:#5c1f1f"></span> odstránené</span>
+        <span><span class="sw" style="background:#1f5c1f"></span> pridané</span>
+        <span id="legendFmt"><span class="sw" style="background:#28386a"></span> zmena formátu (bold/italic)</span>
     </div>
 
     <div class="stats-bar" id="stats"></div>
@@ -211,21 +300,30 @@
     </div>
 </div>
 
+<div id="tooltip"></div>
+
 <script>
-    function computeDiff(a, b) {
+    /* ---------- nastavenie: rozpoznávanie formátu ---------- */
+    const STORE_KEY = 'tc_detectFmt';
+    let detectFmt = false;
+    try { detectFmt = localStorage.getItem(STORE_KEY) === '1'; } catch (e) {}
+
+    /* ---------- generic LCS diff ---------- */
+    function computeDiff(a, b, same) {
+        same = same || function (x, y) { return x === y; };
         const m = a.length, n = b.length;
         const dp = Array.from({length: m + 1}, () => new Uint32Array(n + 1));
         for (let i = 1; i <= m; i++)
             for (let j = 1; j <= n; j++)
-                dp[i][j] = a[i-1] === b[j-1]
+                dp[i][j] = same(a[i-1], b[j-1])
                     ? dp[i-1][j-1] + 1
                     : Math.max(dp[i-1][j], dp[i][j-1]);
 
         const res = [];
         let i = m, j = n;
         while (i > 0 || j > 0) {
-            if (i > 0 && j > 0 && a[i-1] === b[j-1]) {
-                res.push({type: 'eq', val: a[i-1]});
+            if (i > 0 && j > 0 && same(a[i-1], b[j-1])) {
+                res.push({type: 'eq', val: a[i-1], val2: b[j-1]});
                 i--; j--;
             } else if (j > 0 && (i === 0 || dp[i][j-1] >= dp[i-1][j])) {
                 res.push({type: 'ins', val: b[j-1]});
@@ -242,70 +340,177 @@
         return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
 
-    function charHighlight(a, b) {
-        // Skip char-level diff for very long lines (performance)
-        if (a.length + b.length > 3000) {
-            return {
-                left: `<span class="hl-del">${esc(a)}</span>`,
-                right: `<span class="hl-ins">${esc(b)}</span>`
-            };
-        }
-        const ops = computeDiff(a.split(''), b.split(''));
-        let L = '', R = '';
-        let i = 0;
-        while (i < ops.length) {
-            if (ops[i].type === 'eq') {
-                const ch = esc(ops[i].val);
-                L += ch; R += ch;
-                i++;
-            } else {
-                let d = '', ins = '';
-                while (i < ops.length && ops[i].type !== 'eq') {
-                    if (ops[i].type === 'del') d += ops[i].val;
-                    else ins += ops[i].val;
-                    i++;
+    /* ---------- parse contenteditable -> flat styled chars (bold/italic only) ---------- */
+    function parseFlat(el) {
+        const out = [];
+        function lastNL() { return out.length === 0 || out[out.length - 1].ch === '\n'; }
+        function walk(node, b, it) {
+            node.childNodes.forEach(function (child) {
+                if (child.nodeType === 3) {
+                    for (const c of child.nodeValue) {
+                        if (c === '\n' || c === '\r') continue; // HTML source whitespace, nie reálny riadok
+                        out.push({ch: c, b: b, i: it});
+                    }
+                } else if (child.nodeType === 1) {
+                    const tag = child.tagName.toLowerCase();
+                    if (tag === 'br') { out.push({ch: '\n', b: false, i: false}); return; }
+                    let nb = b, ni = it;
+                    if (tag === 'b' || tag === 'strong') nb = true;
+                    if (tag === 'i' || tag === 'em') ni = true;
+                    const st = child.style;
+                    if (st) {
+                        const fw = st.fontWeight;
+                        if (fw === 'bold' || fw === 'bolder' || parseInt(fw, 10) >= 600) nb = true;
+                        if (st.fontStyle === 'italic') ni = true;
+                    }
+                    const block = (tag === 'div' || tag === 'p' || tag === 'li');
+                    if (block && out.length > 0 && !lastNL()) out.push({ch: '\n', b: false, i: false});
+                    walk(child, nb, ni);
                 }
-                if (d)   L += `<span class="hl-del">${esc(d)}</span>`;
-                if (ins) R += `<span class="hl-ins">${esc(ins)}</span>`;
-            }
+            });
         }
-        return {left: L, right: R};
+        walk(el, false, false);
+        return out;
     }
 
-    function compare() {
-        const t1 = document.getElementById('t1').value;
-        const t2 = document.getElementById('t2').value;
+    function flatToLines(flat) {
+        const lines = [[]];
+        for (const c of flat) {
+            if (c.ch === '\n') lines.push([]);
+            else lines[lines.length - 1].push(c);
+        }
+        while (lines.length > 1 && lines[0].length === 0) lines.shift();
+        while (lines.length > 1 && lines[lines.length - 1].length === 0) lines.pop();
+        return lines;
+    }
 
-        const lines1 = t1.split('\n');
-        const lines2 = t2.split('\n');
+    function lineSig(chars) {
+        if (!detectFmt) return chars.map(c => c.ch).join('');
+        return chars.map(c => c.ch + (c.b ? '\u0001' : '') + (c.i ? '\u0002' : '')).join('');
+    }
 
-        let ops;
-        if (lines1.length * lines2.length > 400000) {
-            // Fallback for very large inputs: simple index-based compare
-            ops = [];
-            const max = Math.max(lines1.length, lines2.length);
-            for (let k = 0; k < max; k++) {
-                if (k < lines1.length && k < lines2.length) {
-                    if (lines1[k] === lines2[k]) ops.push({type: 'eq', val: lines1[k]});
-                    else { ops.push({type: 'del', val: lines1[k]}); ops.push({type: 'ins', val: lines2[k]}); }
-                } else if (k < lines1.length) {
-                    ops.push({type: 'del', val: lines1[k]});
-                } else {
-                    ops.push({type: 'ins', val: lines2[k]});
+    /* ---------- build clean HTML from styled chars (used on paste) ---------- */
+    function buildHtml(flat) {
+        let html = '', run = '', cb = false, ci = false, has = false;
+        function flush() {
+            if (!has) return;
+            const open = (cb ? '<b>' : '') + (ci ? '<i>' : '');
+            const close = (ci ? '</i>' : '') + (cb ? '</b>' : '');
+            html += open + esc(run) + close;
+            run = ''; has = false;
+        }
+        for (const c of flat) {
+            if (c.ch === '\n') { flush(); html += '<br>'; continue; }
+            if (has && (c.b !== cb || c.i !== ci)) flush();
+            if (!has) { cb = c.b; ci = c.i; has = true; }
+            run += c.ch;
+        }
+        flush();
+        return html;
+    }
+
+    function sanitizeHtml(html) {
+        const tmp = document.createElement('div');
+        tmp.innerHTML = html;
+        return buildHtml(parseFlat(tmp));
+    }
+
+    /* ---------- render styled+highlighted chars into a diff panel ---------- */
+    function renderRun(arr) {
+        let html = '', run = '', cb, ci, ch, ctip, has = false;
+        function flush() {
+            if (!has) return;
+            const cls = ch ? (' class="hl-' + ch + '"') : '';
+            const style = (cb ? 'font-weight:700;' : '') + (ci ? 'font-style:italic;' : '');
+            const styleAttr = style ? (' style="' + style + '"') : '';
+            const tipAttr = ctip ? (' data-tip="' + esc(ctip).replace(/"/g, '&quot;') + '"') : '';
+            html += '<span' + cls + styleAttr + tipAttr + '>' + esc(run) + '</span>';
+            run = ''; has = false;
+        }
+        for (const c of arr) {
+            if (has && (c.b !== cb || c.i !== ci || c.hl !== ch || (c.tip || '') !== (ctip || ''))) flush();
+            if (!has) { cb = c.b; ci = c.i; ch = c.hl; ctip = c.tip; has = true; }
+            run += c.ch;
+        }
+        flush();
+        return html;
+    }
+
+    function tipFor(hl) {
+        if (hl === 'del') return 'Odstránené (je v Text 1, chýba v Text 2)';
+        if (hl === 'ins') return 'Pridané (je v Text 2, chýba v Text 1)';
+        return '';
+    }
+
+    function tag(chars, hl) {
+        const t = tipFor(hl);
+        return chars.map(c => ({ch: c.ch, b: c.b, i: c.i, hl: hl, tip: t}));
+    }
+
+    /* ---------- char-level diff of two lines (text + format) ---------- */
+    function diffLine(c1, c2) {
+        if (c1.length + c2.length > 3000) {
+            return {left: tag(c1, 'del'), right: tag(c2, 'ins')};
+        }
+        const ops = computeDiff(c1, c2, (x, y) => x.ch === y.ch);
+        const left = [], right = [];
+        for (const op of ops) {
+            if (op.type === 'eq') {
+                const a = op.val, b = op.val2;
+                const sameFmt = !detectFmt || (a.b === b.b && a.i === b.i);
+                let tip = '';
+                if (!sameFmt) {
+                    const parts = [];
+                    if (a.b !== b.b) parts.push(b.b ? 'bold pridaný' : 'bold odstránený');
+                    if (a.i !== b.i) parts.push(b.i ? 'italic pridaný' : 'italic odstránený');
+                    tip = 'Zmena formátu: ' + parts.join(', ');
                 }
+                left.push({ch: a.ch, b: a.b, i: a.i, hl: sameFmt ? null : 'fmt', tip: tip});
+                right.push({ch: b.ch, b: b.b, i: b.i, hl: sameFmt ? null : 'fmt', tip: tip});
+            } else if (op.type === 'del') {
+                left.push({ch: op.val.ch, b: op.val.b, i: op.val.i, hl: 'del', tip: tipFor('del')});
+            } else {
+                right.push({ch: op.val.ch, b: op.val.b, i: op.val.i, hl: 'ins', tip: tipFor('ins')});
             }
-        } else {
-            ops = computeDiff(lines1, lines2);
+        }
+        return {left, right};
+    }
+
+    /* ---------- main compare ---------- */
+    function compare() {
+        let lines1 = flatToLines(parseFlat(document.getElementById('t1')));
+        let lines2 = flatToLines(parseFlat(document.getElementById('t2')));
+
+        // ak je rozpoznávanie vypnuté, ignorujeme formát úplne
+        if (!detectFmt) {
+            const strip = ls => ls.map(line => line.map(c => ({ch: c.ch, b: false, i: false})));
+            lines1 = strip(lines1);
+            lines2 = strip(lines2);
         }
 
-        // Group consecutive del/ins blocks
+        const L1 = lines1.map(ch => ({chars: ch, sig: lineSig(ch)}));
+        const L2 = lines2.map(ch => ({chars: ch, sig: lineSig(ch)}));
+
+        let ops;
+        if (L1.length * L2.length > 400000) {
+            ops = [];
+            const max = Math.max(L1.length, L2.length);
+            for (let k = 0; k < max; k++) {
+                if (k < L1.length && k < L2.length) {
+                    if (L1[k].sig === L2[k].sig) ops.push({type: 'eq', val: L1[k], val2: L2[k]});
+                    else { ops.push({type: 'del', val: L1[k]}); ops.push({type: 'ins', val: L2[k]}); }
+                } else if (k < L1.length) ops.push({type: 'del', val: L1[k]});
+                else ops.push({type: 'ins', val: L2[k]});
+            }
+        } else {
+            ops = computeDiff(L1, L2, (x, y) => x.sig === y.sig);
+        }
+
         const groups = [];
         let i = 0;
         while (i < ops.length) {
-            if (ops[i].type === 'eq') {
-                groups.push({type: 'eq', val: ops[i].val});
-                i++;
-            } else {
+            if (ops[i].type === 'eq') { groups.push({type: 'eq', val: ops[i].val}); i++; }
+            else {
                 const dels = [], ins = [];
                 while (i < ops.length && ops[i].type !== 'eq') {
                     if (ops[i].type === 'del') dels.push(ops[i].val);
@@ -321,8 +526,9 @@
 
         for (const g of groups) {
             if (g.type === 'eq') {
-                leftRows.push({cls: 'line-equal', num: ln1++, html: esc(g.val)});
-                rightRows.push({cls: 'line-equal', num: ln2++, html: esc(g.val)});
+                const html = renderRun(tag(g.val.chars, null));
+                leftRows.push({cls: 'line-equal', num: ln1++, html});
+                rightRows.push({cls: 'line-equal', num: ln2++, html});
             } else {
                 const max = Math.max(g.dels.length, g.ins.length);
                 diffCount += max;
@@ -330,15 +536,15 @@
                     const hasDel = j < g.dels.length;
                     const hasIns = j < g.ins.length;
                     if (hasDel && hasIns) {
-                        const {left, right} = charHighlight(g.dels[j], g.ins[j]);
-                        leftRows.push({cls: 'line-removed', num: ln1++, html: left});
-                        rightRows.push({cls: 'line-added', num: ln2++, html: right});
+                        const {left, right} = diffLine(g.dels[j].chars, g.ins[j].chars);
+                        leftRows.push({cls: 'line-removed', num: ln1++, html: renderRun(left)});
+                        rightRows.push({cls: 'line-added', num: ln2++, html: renderRun(right)});
                     } else if (hasDel) {
-                        leftRows.push({cls: 'line-removed', num: ln1++, html: esc(g.dels[j])});
+                        leftRows.push({cls: 'line-removed', num: ln1++, html: renderRun(tag(g.dels[j].chars, 'del'))});
                         rightRows.push({cls: 'line-empty', num: '', html: ''});
                     } else {
                         leftRows.push({cls: 'line-empty', num: '', html: ''});
-                        rightRows.push({cls: 'line-added', num: ln2++, html: esc(g.ins[j])});
+                        rightRows.push({cls: 'line-added', num: ln2++, html: renderRun(tag(g.ins[j].chars, 'ins'))});
                     }
                 }
             }
@@ -356,7 +562,7 @@
         const stats = document.getElementById('stats');
         stats.style.display = 'block';
         if (diffCount === 0) {
-            stats.textContent = 'Texty sú identické.';
+            stats.textContent = detectFmt ? 'Texty sú identické (vrátane formátu).' : 'Texty sú identické.';
             stats.className = 'stats-bar identical';
         } else {
             stats.textContent = `${diffCount} rozdiel${diffCount === 1 ? '' : diffCount < 5 ? 'y' : 'ov'} nájdených`;
@@ -365,14 +571,66 @@
         document.getElementById('diffContainer').style.display = 'block';
     }
 
+    /* ---------- editory: paste ---------- */
+    ['t1', 't2'].forEach(id => {
+        const el = document.getElementById(id);
+        el.addEventListener('paste', e => {
+            e.preventDefault();
+            const cd = e.clipboardData || window.clipboardData;
+            const html = cd.getData('text/html');
+            const text = cd.getData('text/plain');
+            let ins;
+            if (detectFmt && html) ins = sanitizeHtml(html);
+            else ins = esc(text).replace(/\n/g, '<br>');
+            document.execCommand('insertHTML', false, ins);
+        });
+    });
+
+    /* ---------- prepínač ---------- */
+    function applyToggleUI() {
+        document.getElementById('fmtToggle').checked = detectFmt;
+        document.getElementById('legendFmt').style.display = detectFmt ? 'inline-flex' : 'none';
+    }
+
+    document.getElementById('fmtToggle').addEventListener('change', function () {
+        detectFmt = this.checked;
+        try { localStorage.setItem(STORE_KEY, detectFmt ? '1' : '0'); } catch (e) {}
+        applyToggleUI();
+        if (document.getElementById('diffContainer').style.display === 'block') compare();
+    });
+
+    applyToggleUI();
+
+    /* ---------- tooltip pri prejdení myšou ---------- */
+    const tooltip = document.getElementById('tooltip');
+    const diffContainer = document.getElementById('diffContainer');
+    diffContainer.addEventListener('mousemove', e => {
+        const el = e.target.closest && e.target.closest('[data-tip]');
+        if (el) {
+            tooltip.textContent = el.getAttribute('data-tip');
+            tooltip.style.display = 'block';
+            let x = e.clientX + 12, y = e.clientY + 16;
+            const tw = tooltip.offsetWidth, th = tooltip.offsetHeight;
+            if (x + tw > window.innerWidth - 8) x = e.clientX - tw - 12;
+            if (y + th > window.innerHeight - 8) y = e.clientY - th - 16;
+            tooltip.style.left = x + 'px';
+            tooltip.style.top = y + 'px';
+        } else {
+            tooltip.style.display = 'none';
+        }
+    });
+    diffContainer.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
+
     function switchTexts() {
         const t1 = document.getElementById('t1'), t2 = document.getElementById('t2');
-        [t1.value, t2.value] = [t2.value, t1.value];
+        const tmp = t1.innerHTML;
+        t1.innerHTML = t2.innerHTML;
+        t2.innerHTML = tmp;
     }
 
     function clearAll() {
-        document.getElementById('t1').value = '';
-        document.getElementById('t2').value = '';
+        document.getElementById('t1').innerHTML = '';
+        document.getElementById('t2').innerHTML = '';
         document.getElementById('stats').style.display = 'none';
         document.getElementById('diffContainer').style.display = 'none';
     }
