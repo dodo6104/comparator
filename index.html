@@ -349,7 +349,8 @@
                 if (child.nodeType === 3) {
                     for (const c of child.nodeValue) {
                         if (c === '\n' || c === '\r') continue; // HTML source whitespace, nie reálny riadok
-                        out.push({ch: c, b: b, i: it});
+                        // zjednotenie medzier: &nbsp; (\u00a0), tab a pod. -> bežná medzera
+                        out.push({ch: c.trim() === '' ? ' ' : c, b: b, i: it});
                     }
                 } else if (child.nodeType === 1) {
                     const tag = child.tagName.toLowerCase();
@@ -386,7 +387,10 @@
 
     function lineSig(chars) {
         if (!detectFmt) return chars.map(c => c.ch).join('');
-        return chars.map(c => c.ch + (c.b ? '\u0001' : '') + (c.i ? '\u0002' : '')).join('');
+        return chars.map(c => {
+            const fmt = c.ch.trim() === '' ? '' : (c.b ? '\u0001' : '') + (c.i ? '\u0002' : '');
+            return c.ch + fmt;
+        }).join('');
     }
 
     /* ---------- build clean HTML from styled chars (used on paste) ---------- */
@@ -409,10 +413,28 @@
         return html;
     }
 
+    function normalizeFlat(flat) {
+        const out = [];
+        let prevWs = false;
+        for (const c of flat) {
+            if (c.ch === '\n') { out.push(c); prevWs = false; continue; }
+            const isWs = c.ch.trim() === '';
+            if (isWs) {
+                if (prevWs) continue; // collapse consecutive spaces
+                out.push({ch: c.ch, b: false, i: false}); // strip format from spaces
+                prevWs = true;
+            } else {
+                out.push(c);
+                prevWs = false;
+            }
+        }
+        return out;
+    }
+
     function sanitizeHtml(html) {
         const tmp = document.createElement('div');
         tmp.innerHTML = html;
-        return buildHtml(parseFlat(tmp));
+        return buildHtml(normalizeFlat(parseFlat(tmp)));
     }
 
     /* ---------- render styled+highlighted chars into a diff panel ---------- */
@@ -457,7 +479,7 @@
         for (const op of ops) {
             if (op.type === 'eq') {
                 const a = op.val, b = op.val2;
-                const sameFmt = !detectFmt || (a.b === b.b && a.i === b.i);
+                const sameFmt = !detectFmt || a.ch.trim() === '' || (a.b === b.b && a.i === b.i);
                 let tip = '';
                 if (!sameFmt) {
                     const parts = [];
