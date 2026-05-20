@@ -234,13 +234,14 @@
 </div>
 
 <script>
-    // Keep only italic/bold from pasted HTML, strip everything else
+    // Keep only italic/bold from pasted HTML, strip everything else (colors, hr, images, …)
     function sanitizePasteHtml(html) {
         const doc = new DOMParser().parseFromString(html, 'text/html');
+        const SKIP = new Set(['script','style','hr','img','svg','button','input','select','iframe','head','meta','link']);
         let out = '';
         function walk(node, it, bo) {
             if (node.nodeType === 3) {
-                const t = esc(node.textContent);
+                const t = node.textContent.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
                 if (!t) return;
                 if (it && bo) out += `<em><strong>${t}</strong></em>`;
                 else if (it)  out += `<em>${t}</em>`;
@@ -250,14 +251,15 @@
             }
             if (node.nodeType !== 1) return;
             const tag = node.tagName.toLowerCase();
+            if (SKIP.has(tag)) return;
+            if (tag === 'br') { out += '<br>'; return; }
             const sty = node.getAttribute('style') || '';
             const ci = it || tag === 'i' || tag === 'em' || /font-style\s*:\s*italic/i.test(sty);
             const cb = bo || tag === 'b' || tag === 'strong' || /font-weight\s*:\s*(bold|[6-9]\d\d|[1-9]\d{3})/i.test(sty);
-            if (tag === 'br') { out += '<br>'; return; }
-            const isBlock = /^(p|div|li|h[1-6]|blockquote|td|th)$/.test(tag);
-            if (isBlock && out && !out.endsWith('<br>')) out += '<br>';
+            const isBlock = /^(p|div|li|h[1-6]|blockquote|td|th|tr|ul|ol|section|article|header|footer|main|nav|figure)$/.test(tag);
+            if (isBlock && out.length && !out.endsWith('<br>')) out += '<br>';
             for (const c of node.childNodes) walk(c, ci, cb);
-            if (isBlock && out && !out.endsWith('<br>')) out += '<br>';
+            if (isBlock && out.length && !out.endsWith('<br>')) out += '<br>';
         }
         walk(doc.body, false, false);
         return out.replace(/(<br>)+$/, '');
@@ -268,9 +270,28 @@
             e.preventDefault();
             const cd = e.clipboardData || window.clipboardData;
             if (document.getElementById('htmlItalic').checked) {
-                const html = cd.getData('text/html');
-                document.execCommand('insertHTML', false,
-                    html ? sanitizePasteHtml(html) : esc(cd.getData('text/plain')));
+                const rawHtml = cd.getData('text/html');
+                const clean = rawHtml
+                    ? sanitizePasteHtml(rawHtml)
+                    : cd.getData('text/plain').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
+                // Insert via DOM (more reliable than execCommand insertHTML)
+                const sel = window.getSelection();
+                if (!sel.rangeCount) return;
+                const range = sel.getRangeAt(0);
+                range.deleteContents();
+                const tmp = document.createElement('div');
+                tmp.innerHTML = clean;
+                const frag = document.createDocumentFragment();
+                let last = null;
+                while (tmp.firstChild) last = frag.appendChild(tmp.firstChild);
+                range.insertNode(frag);
+                if (last) {
+                    const r = document.createRange();
+                    r.setStartAfter(last);
+                    r.collapse(true);
+                    sel.removeAllRanges();
+                    sel.addRange(r);
+                }
             } else {
                 document.execCommand('insertText', false, cd.getData('text/plain'));
             }
