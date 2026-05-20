@@ -234,13 +234,45 @@
 </div>
 
 <script>
-    // When italic mode is OFF: strip formatting on paste so user sees plain text
+    // Keep only italic/bold from pasted HTML, strip everything else
+    function sanitizePasteHtml(html) {
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        let out = '';
+        function walk(node, it, bo) {
+            if (node.nodeType === 3) {
+                const t = esc(node.textContent);
+                if (!t) return;
+                if (it && bo) out += `<em><strong>${t}</strong></em>`;
+                else if (it)  out += `<em>${t}</em>`;
+                else if (bo)  out += `<strong>${t}</strong>`;
+                else          out += t;
+                return;
+            }
+            if (node.nodeType !== 1) return;
+            const tag = node.tagName.toLowerCase();
+            const sty = node.getAttribute('style') || '';
+            const ci = it || tag === 'i' || tag === 'em' || /font-style\s*:\s*italic/i.test(sty);
+            const cb = bo || tag === 'b' || tag === 'strong' || /font-weight\s*:\s*(bold|[6-9]\d\d|[1-9]\d{3})/i.test(sty);
+            if (tag === 'br') { out += '<br>'; return; }
+            const isBlock = /^(p|div|li|h[1-6]|blockquote|td|th)$/.test(tag);
+            if (isBlock && out && !out.endsWith('<br>')) out += '<br>';
+            for (const c of node.childNodes) walk(c, ci, cb);
+            if (isBlock && out && !out.endsWith('<br>')) out += '<br>';
+        }
+        walk(doc.body, false, false);
+        return out.replace(/(<br>)+$/, '');
+    }
+
     ['t1', 't2'].forEach(id => {
         document.getElementById(id).addEventListener('paste', e => {
-            if (!document.getElementById('htmlItalic').checked) {
-                e.preventDefault();
-                const text = (e.clipboardData || window.clipboardData).getData('text/plain');
-                document.execCommand('insertText', false, text);
+            e.preventDefault();
+            const cd = e.clipboardData || window.clipboardData;
+            if (document.getElementById('htmlItalic').checked) {
+                const html = cd.getData('text/html');
+                document.execCommand('insertHTML', false,
+                    html ? sanitizePasteHtml(html) : esc(cd.getData('text/plain')));
+            } else {
+                document.execCommand('insertText', false, cd.getData('text/plain'));
             }
         });
     });
